@@ -13,7 +13,7 @@
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "crypt32.lib")
 
-namespace anticrack {
+namespace AegisVM {
 
     inline std::vector<uint8_t> generate_random_bytes(size_t count) {
         std::vector<uint8_t> bytes(count);
@@ -188,8 +188,8 @@ namespace anticrack {
         operator const char* () const { return data.c_str(); }
     };
 
-#define XOR_STR(str)        (anticrack::XorString<sizeof(str)>(str).decrypt())
-#define SECURE_STR(str)     (anticrack::SecureString(str).decrypt())
-#define PROTECTED_STR(str)  (anticrack::ProtectedString(str).decrypt())
+#define XOR_STR(str)        (AegisVM::XorString<sizeof(str)>(str).decrypt())
+#define SECURE_STR(str)     (AegisVM::SecureString(str).decrypt())
+#define PROTECTED_STR(str)  (AegisVM::ProtectedString(str).decrypt())
 
 } // namespace anticrack
