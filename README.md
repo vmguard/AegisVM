@@ -1,4 +1,6 @@
 # AegisVM
 
 Coming soon...
-So far, strenc.h
+
+So far, string encryption done
+
