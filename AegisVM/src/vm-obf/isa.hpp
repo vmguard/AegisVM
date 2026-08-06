@@ -7,78 +7,116 @@
     8-11: int32_t  _pad (reserved)
     12-15: int32_t  imm32_hi (upper 32 bits for imm64)
 */
+
 #pragma once
 #include <cstdint>
+#include <cstddef>
 #include <cstring>
 
-namespace AegisVM {
+// uh I have an pseduorandom opcode generator, will upload later
+#include "rvm_opcodes_gen2.inc"
 
+//chances are I will never support x86, I dont enjoy writing it, and do not want to rewrite half the codebase.
+#if !defined(_WIN64) && !defined(_M_X64)
+#error "RealVM requires a Win64/x64 toolchain"
+#endif
+static_assert(sizeof(void*) == 8 && sizeof(std::size_t) == 8,
+              "RealVM requires 64-bit pointers and size_t");
+
+namespace rvm {
 enum : uint8_t {
     RVM_F_IMM64   = 0x01,   // imm64 present (imm32 | ((uint64_t)imm32_hi << 32))
+    // Contextual bit for RVM_MUL: use signed IMUL overflow semantics.
+    // RVM_MUL immediate forms use IMM32 together with this bit.
+    RVM_F_SIGNED  = 0x01,
     RVM_F_IMM32   = 0x02,   // 32-bit immediate present (in imm32 field)
     RVM_F_REL32   = 0x04,   // imm32 is a signed relative branch offset
-    RVM_F_SIZE8   = 0x00,   // 64-bit operation (default)
+    // Contextual bit for non branch binary ops: source is memory addressed by
+    // src + imm32 + optional index*scale. Branches never inspect this bit.
+    RVM_F_MEM_SRC = 0x04,
+    // For RVM_MOV_RM only: zero-extend the loaded source width instead of
+    // preserving the destination register's upper bits.
+    RVM_F_ZERO_EXT = 0x04,
+    RVM_F_SIZE8   = 0x00,   // 64-bit operation
     RVM_F_SIZE4   = 0x08,   // 32-bit operation
     RVM_F_SIZE2   = 0x10,   // 16-bit operation
     RVM_F_SIZE1   = 0x18,   // 8-bit operation
     RVM_F_SIZEMSK = 0x18,
+    RVM_F_HAS_INDEX = 0x80, // memory op has an index register in imm32_hi
+    RVM_F_SCALE_SHIFT = 5,
+    RVM_F_SCALE_MASK  = 0x60, // bits 5-6 encode scale: 0=1, 1=2, 2=4, 3=8
 };
 
+//  The physical bytes placed in bytecode are determined at build time by rvm_opcodes_gen.inc, once again, will upload latar.  
 enum RvmOpcode : uint8_t {
-    RVM_NOP    = 0x00,
+    RVM_NOP    = 0,
 
-    RVM_MOV_RR = 0x01,   // vreg[dst] = vreg[src]
-    RVM_MOV_RI = 0x02,   // vreg[dst] = imm (32 or 64 bit, per flags)
-    RVM_MOV_RM = 0x03,   // vreg[dst] = mem[vreg[src] + imm32]
-    RVM_MOV_MR = 0x04,   // mem[vreg[dst] + imm32] = vreg[src]
-    RVM_MOV_RF = 0x05,   // vreg[dst] = vflags
-    RVM_MOV_FR = 0x06,   // vflags = vreg[src]
+    // Data movement
+    RVM_MOV_RR = 1,   // vreg[dst] = vreg[src]
+    RVM_MOV_RI = 2,   // vreg[dst] = imm (32 or 64 bit, per flags)
+    RVM_MOV_RM = 3,   // vreg[dst] = mem[vreg[src] + imm32]
+    RVM_MOV_MR = 4,   // mem[vreg[dst] + imm32] = vreg[src]
+    RVM_MOV_RF = 5,   // vreg[dst] = vflags
+    RVM_MOV_FR = 6,   // vflags = vreg[src]
 
-    RVM_PUSH   = 0x10,
-    RVM_POP    = 0x11,
+    // Stack
+    RVM_PUSH   = 7,
+    RVM_POP    = 8,
 
-    RVM_ADD    = 0x20,
-    RVM_SUB    = 0x21,
-    RVM_MUL    = 0x22,
-    RVM_DIV    = 0x23,
-    RVM_MOD    = 0x24,
-    RVM_AND    = 0x25,
-    RVM_OR     = 0x26,
-    RVM_XOR    = 0x27,
-    RVM_SHL    = 0x28,
-    RVM_SHR    = 0x29,
-    RVM_SAR    = 0x2A,
-    RVM_ROL    = 0x2B,
-    RVM_ROR    = 0x2C,
+    // Arithmetic
+    RVM_ADD    = 9,
+    RVM_SUB    = 10,
+    RVM_MUL    = 11,
+    RVM_DIV    = 12,
+    RVM_MOD    = 13,
+    RVM_AND    = 14,
+    RVM_OR     = 15,
+    RVM_XOR    = 16,
+    RVM_SHL    = 17,
+    RVM_SHR    = 18,
+    RVM_SAR    = 19,
+    RVM_ROL    = 20,
+    RVM_ROR    = 21,
 
-    RVM_NEG    = 0x30,
-    RVM_NOT    = 0x31,
-    RVM_INC    = 0x32,
-    RVM_DEC    = 0x33,
+    // Unary
+    RVM_NEG    = 22,
+    RVM_NOT    = 23,
+    RVM_INC    = 24,
+    RVM_DEC    = 25,
 
-    RVM_CMP    = 0x40,
-    RVM_TEST   = 0x41,
+    // Compare / test
+    RVM_CMP    = 26,
+    RVM_TEST   = 27,
 
-    RVM_JMP    = 0x50,   // unconditional (imm32 = rel offset from NEXT insn)
-    RVM_JZ     = 0x51,   // jump if ZF=1
-    RVM_JNZ    = 0x52,   // jump if ZF=0
-    RVM_JB     = 0x53,   // jump if CF=1 (below)
-    RVM_JNB    = 0x54,   // jump if CF=0 (not below)
-    RVM_JA     = 0x55,   // jump if CF=0 && ZF=0 (above)
-    RVM_JNA    = 0x56,   // jump if CF=1 || ZF=1 (not above)
-    RVM_JL     = 0x57,   // jump if SF!=OF (less, signed)
-    RVM_JGE    = 0x58,   // jump if SF==OF (greater or equal, signed)
-    RVM_JG     = 0x59,   // jump if ZF=0 && SF==OF (greater, signed)
-    RVM_JLE    = 0x5A,   // jump if ZF=1 || SF!=OF (less or equal, signed)
-    RVM_CALL   = 0x5B,   // push VIP+16; VIP += rel32
-    RVM_RET    = 0x5C,   // VIP = pop()
-    RVM_HALT   = 0x5D,   // stop execution; return vreg[0]
+    // Control flow
+    RVM_JMP    = 28,   // unconditional (imm32 = rel offset from NEXT insn)
+    RVM_JZ     = 29,   // jump if ZF=1
+    RVM_JNZ    = 30,   // jump if ZF=0
+    RVM_JB     = 31,   // jump if CF=1 (below)
+    RVM_JNB    = 32,   // jump if CF=0 (not below)
+    RVM_JA     = 33,   // jump if CF=0 && ZF=0 (above)
+    RVM_JNA    = 34,   // jump if CF=1 || ZF=1 (not above)
+    RVM_JL     = 35,   // jump if SF!=OF (less, signed)
+    RVM_JGE    = 36,   // jump if SF==OF (greater or equal, signed)
+    RVM_JG     = 37,   // jump if ZF=0 && SF==OF (greater, signed)
+    RVM_JLE    = 38,   // jump if ZF=1 || SF!=OF (less or equal, signed)
+    RVM_CALL   = 39,   // push VIP+16; VIP += rel32
+    RVM_RET    = 40,   // VIP = pop()
+    RVM_HALT   = 41,   // stop execution; return vreg[0]
 
-    RVM_LEA    = 0x60,   // vreg[dst] = vreg[src] + imm32
-    RVM_TRAP   = 0xFE,   // intentional trap (debugging)
-    RVM_MAX    = 0xFF,
+    // Special
+    RVM_LEA    = 42,   // vreg[dst] = vreg[src] + imm32
+    RVM_TRAP   = 43,   // intentional trap (debugging)
+    RVM_MAX    = 44,
 };
 
+// These are intentionally not enum values so the generated mapping can be changed without recompiling the rest of the code.
+inline uint8_t rvm_encode_opcode(uint8_t logical) noexcept {
+    return rvm_logical_to_physical[logical];
+}
+inline uint8_t rvm_decode_opcode(uint8_t physical) noexcept {
+    return rvm_physical_to_logical[physical];
+}
 
 enum RvmRegister : uint8_t {
     RVM_R0 = 0,  RVM_R1,  RVM_R2,  RVM_R3,
@@ -89,14 +127,12 @@ enum RvmRegister : uint8_t {
     RVM_REG_NONE  = 0xFF,
 };
 
-
 enum : uint64_t {
     RVM_VF_ZF = 1ULL << 0,   // zero
     RVM_VF_SF = 1ULL << 1,   // sign
     RVM_VF_CF = 1ULL << 7,   // carry
     RVM_VF_OF = 1ULL << 11,  // overflow
 };
-
 
 #pragma pack(push, 1)
 struct RvmInstruction {
@@ -116,7 +152,7 @@ inline RvmInstruction make_insn(uint8_t op, uint8_t d = 0, uint8_t s = 0,
                                  uint8_t fl = 0, int32_t i32 = 0,
                                  int32_t i32h = 0) noexcept {
     RvmInstruction insn{};
-    insn.opcode = op;
+    insn.opcode = rvm_encode_opcode(op);
     insn.dst    = d;
     insn.src    = s;
     insn.flags  = fl;
@@ -160,24 +196,64 @@ inline int32_t insn_rel32(const RvmInstruction& insn) noexcept {
     return insn.imm32;
 }
 
+
 struct RvmBytecodeHeader {
     uint32_t magic;          // RVM 0x004D5652
-    uint32_t version;        // 1
+    uint32_t version;        // 2 for the authenticated container
     uint32_t num_insns;      // number of RvmInstruction entries
-    uint32_t data_size;      // size of trailing data segment 
+    uint32_t data_size;      // size of trailing data segment (if any)
 };
 static constexpr uint32_t RVM_BC_MAGIC   = 0x004D5652u; // "RVM\0"
-static constexpr uint32_t RVM_BC_VERSION = 1;
+static constexpr uint32_t RVM_BC_VERSION = 2;
 
 struct RvmContext {
-    uint64_t vreg[16];        // general purpose regs
-    uint64_t vflags;          // virt flags
-    uint64_t vsp;             // virt stack pointer 
-    uint64_t vstack[256];     // virt call stack
+    uint64_t vreg[16];        // general-purpose registers
+    uint64_t vflags;          // virtual flags
+
+    // Hardening fields (defeat symbolic execution / taint tracking) 
+    uint64_t side_channel;    // deterministic accumulator; every handler XORs
+                               // its result here, making all handlers impure
+    uint64_t scratch[16];     // decoy memory — handlers write garbage here to
+                               // introduce fake data dependencies for taint tracking
+    uint64_t entropy_seed;    // PRNG state for per-handler jitter
+
+    uint64_t vsp;             // virtual stack pointer 
+    uint64_t vstack[256];     // virtual call stack
     const uint8_t* bytecode;  // pointer to bytecode array
     size_t    bc_size;        // total bytecode size
-    size_t    vip;            // virt instruction pointer (byte offset)
-    uint64_t  result;         // return value 
+    size_t    vip;            // virtual instruction pointer (byte offset)
+    uint64_t  result;         // return value, set by HALT
+
+    // Protected entry metadata. These fields are zero for ordinary rvm_run() calls.
+    uint64_t  bytecode_key;
+    uint64_t  bytecode_checksum;
 };
 
-} 
+// The rewriter emits a native VM-enter stub which lays out this structure directly on the stack.
+// Keep these offsets in one authoritative place so the interpreter and generated machine code wot drift apart.
+inline constexpr std::size_t RVM_CTX_VREG_OFFSET    = offsetof(RvmContext, vreg);
+inline constexpr std::size_t RVM_CTX_VFLAGS_OFFSET  = offsetof(RvmContext, vflags);
+inline constexpr std::size_t RVM_CTX_VSP_OFFSET     = offsetof(RvmContext, vsp);
+inline constexpr std::size_t RVM_CTX_BYTECODE_OFFSET = offsetof(RvmContext, bytecode);
+inline constexpr std::size_t RVM_CTX_BCSIZE_OFFSET  = offsetof(RvmContext, bc_size);
+inline constexpr std::size_t RVM_CTX_VIP_OFFSET     = offsetof(RvmContext, vip);
+inline constexpr std::size_t RVM_CTX_RESULT_OFFSET  = offsetof(RvmContext, result);
+inline constexpr std::size_t RVM_CTX_KEY_OFFSET     = offsetof(RvmContext, bytecode_key);
+inline constexpr std::size_t RVM_CTX_CSUM_OFFSET    = offsetof(RvmContext, bytecode_checksum);
+inline constexpr std::size_t RVM_CTX_SIZE           = sizeof(RvmContext);
+
+// Structural assertions only, the compilers offsetof/sizeof values are the ABI authority consumed by the generated VM-enter stub. 
+static_assert(RVM_CTX_VREG_OFFSET == offsetof(RvmContext, vreg));
+static_assert(RVM_CTX_VFLAGS_OFFSET == RVM_CTX_VREG_OFFSET + sizeof(RvmContext::vreg));
+static_assert(offsetof(RvmContext, side_channel) == RVM_CTX_VFLAGS_OFFSET + sizeof(RvmContext::vflags));
+static_assert(RVM_CTX_VSP_OFFSET == offsetof(RvmContext, entropy_seed) + sizeof(RvmContext::entropy_seed));
+static_assert(RVM_CTX_BYTECODE_OFFSET == RVM_CTX_VSP_OFFSET + sizeof(RvmContext::vsp) + sizeof(RvmContext::vstack));
+static_assert(RVM_CTX_BCSIZE_OFFSET == RVM_CTX_BYTECODE_OFFSET + sizeof(RvmContext::bytecode));
+static_assert(RVM_CTX_VIP_OFFSET == RVM_CTX_BCSIZE_OFFSET + sizeof(RvmContext::bc_size));
+static_assert(RVM_CTX_RESULT_OFFSET == RVM_CTX_VIP_OFFSET + sizeof(RvmContext::vip));
+static_assert(RVM_CTX_KEY_OFFSET == RVM_CTX_RESULT_OFFSET + sizeof(RvmContext::result));
+static_assert(RVM_CTX_CSUM_OFFSET == RVM_CTX_KEY_OFFSET + sizeof(RvmContext::bytecode_key));
+static_assert(RVM_CTX_SIZE == RVM_CTX_CSUM_OFFSET + sizeof(RvmContext::bytecode_checksum));
+
+} // namespace rvm
+
