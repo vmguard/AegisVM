@@ -31,7 +31,7 @@ static uint32_t rotl32(uint32_t v, unsigned n) {
     (a) += (b); (d) ^= (a); (d) = rotl32((d), 8);  \
     (c) += (d); (b) ^= (c); (b) = rotl32((b), 7);  \
 } while (0)
-
+// say dude, "duuuuuuuuuuuuuuude"
 void chacha20_decrypt_runtime(unsigned char* data, unsigned long long len,
                               const unsigned char* key,
                               const unsigned char* nonce,
